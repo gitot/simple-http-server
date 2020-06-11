@@ -1,54 +1,125 @@
 package com.gyw.server.http;
 
-import com.gyw.server.http.exceutor.Executor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.gyw.server.http.entity.Request;
+import com.gyw.server.http.entity.Response;
+import com.gyw.server.http.servlet.Servlet;
 
-import java.io.BufferedReader;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
+
+/**
+ * Put logic in corresponding method ,state in field instead of everything in a
+ * single "main" method.This can "divide and conquer" the complex problem into
+ * some smaller problem,causing the codes readable.
+ */
 public class Bootstrap {
 
-    private static Exception exception;
 
-    private static Logger logger = LoggerFactory.getLogger(Bootstrap.class);
+    private int port = 8080;
+    private ServerSocket serverSocket;
+    private Map<String, Servlet> urlMapping = new HashMap<>();
 
-    private static Executor executor = Executor.INSTANCE;
+    private Properties properties = new Properties();
 
-    public static void main(String[] args) {
+
+    public void init() {
+        String path = this.getClass().getResource("/").getPath();
+        FileInputStream fileInputStream = null;
         try {
-            ServerSocket serverSocket = new ServerSocket(80);
+            fileInputStream = new FileInputStream(path + "web.properties");
+            properties.load(fileInputStream);
+
+            for (Object key : properties.keySet()) {
+                String name = (String) key;
+                if (name.endsWith("url")) {
+                    String servletName = name.replaceAll("\\.url", "");
+                    String url = properties.getProperty(name);
+                    Class<?> clz = Class.forName(properties.getProperty(servletName + ".className"));
+                    Servlet servlet = (Servlet) clz.getDeclaredConstructor().newInstance();
+                    urlMapping.put(url, servlet);
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            if (fileInputStream != null) {
+                try {
+                    fileInputStream.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+
+    }
+
+
+    public void start() {
+        init();
+
+        try {
+            serverSocket = new ServerSocket(port);
+            System.out.println("Server start on port :" + port);
+            ExecutorService executorService = new ThreadPoolExecutor(
+                    1,
+                    1,
+                    1000,
+                    TimeUnit.MILLISECONDS,
+                    new LinkedBlockingQueue<>());
             while (true) {
-                Socket socket = serverSocket.accept();
-                executor.execute(() -> {
-                    while (true) {
-                        InputStream inputStream = null;
-                        try {
-                            inputStream = socket.getInputStream();
-                        } catch (IOException e) {
-                            e.printStackTrace();
-                        }
-                        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-                        String s;
-                        try {
-                            while (((s = reader.readLine()) != null)) {
-                                System.out.println(s);
-                            }
-                        } catch (IOException e) {
-                            e.printStackTrace();
-                        }
+                executorService.execute(() -> {
+                    try (Socket socket = serverSocket.accept()) {
+                        process(socket);
+                    } catch (Exception e) {
+                        e.printStackTrace();
                     }
                 });
 
             }
-
-        } catch (IOException e) {
-            exception = e;
+        } catch (Exception e) {
+            e.printStackTrace();
         }
-        logger.error("error msg: ", exception);
+
+    }
+
+    private void process(Socket socket) throws Exception {
+        InputStream in = socket.getInputStream();
+        OutputStream out = socket.getOutputStream();
+        Request request = new Request(in);
+        Response response = new Response(out);
+
+        String url = request.getUrl();
+        Servlet servlet = urlMapping.get(url);
+
+
+        if (urlMapping.containsKey(url)) {
+            servlet.service(request, response);
+        } else {
+            response.write("404 Not Found");
+        }
+
+        out.flush();
+        out.close();
+
+        in.close();
+        socket.close();
+    }
+
+    public static void main(String[] args) {
+        Bootstrap bootstrap = new Bootstrap();
+        bootstrap.start();
     }
 }
