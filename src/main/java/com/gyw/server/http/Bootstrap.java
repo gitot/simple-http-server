@@ -2,7 +2,16 @@ package com.gyw.server.http;
 
 import com.gyw.server.http.entity.Request;
 import com.gyw.server.http.entity.Response;
+import com.gyw.server.http.handler.TomcatHandler;
 import com.gyw.server.http.servlet.Servlet;
+import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.*;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.codec.http.HttpMessage;
+import io.netty.handler.codec.http.HttpRequestDecoder;
+import io.netty.handler.codec.http.HttpResponseEncoder;
 
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -13,10 +22,6 @@ import java.net.Socket;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 
 
 /**
@@ -67,56 +72,42 @@ public class Bootstrap {
     }
 
 
-    public void start() {
+    public void start()  {
         init();
 
+        NioEventLoopGroup boss = new NioEventLoopGroup(1);
+        NioEventLoopGroup worker = new NioEventLoopGroup();
+
+
         try {
-            serverSocket = new ServerSocket(port);
-            System.out.println("Server start on port :" + port);
-            ExecutorService executorService = new ThreadPoolExecutor(
-                    1,
-                    1,
-                    1000,
-                    TimeUnit.MILLISECONDS,
-                    new LinkedBlockingQueue<>());
-            while (true) {
-                executorService.execute(() -> {
-                    try (Socket socket = serverSocket.accept()) {
-                        process(socket);
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
-                });
+            ServerBootstrap serverBootstrap = new ServerBootstrap()
+                    .group(boss, worker)
+                    .channel(NioServerSocketChannel.class)
+                    .childHandler(new ChannelInitializer<NioSocketChannel>() {
 
-            }
-        } catch (Exception e) {
+                        protected void initChannel(NioSocketChannel channel) throws Exception {
+                            ChannelPipeline pipeline = channel.pipeline();
+                            pipeline.addLast(new HttpResponseEncoder())
+                                    .addLast(new HttpRequestDecoder())
+                                    .addLast(new TomcatHandler(urlMapping));
+                        }
+                    })
+                    .childOption(ChannelOption.SO_BACKLOG, 128);
+
+
+            ChannelFuture future = serverBootstrap.bind(port).sync();
+            System.out.println("netty started on port: " + port);
+            future.channel().closeFuture().sync();
+        } catch (InterruptedException e) {
             e.printStackTrace();
+        }finally {
+            boss.shutdownGracefully();
+            worker.shutdownGracefully();
         }
+
 
     }
 
-    private void process(Socket socket) throws Exception {
-        InputStream in = socket.getInputStream();
-        OutputStream out = socket.getOutputStream();
-        Request request = new Request(in);
-        Response response = new Response(out);
-
-        String url = request.getUrl();
-        Servlet servlet = urlMapping.get(url);
-
-
-        if (urlMapping.containsKey(url)) {
-            servlet.service(request, response);
-        } else {
-            response.write("404 Not Found");
-        }
-
-        out.flush();
-        out.close();
-
-        in.close();
-        socket.close();
-    }
 
     public static void main(String[] args) {
         Bootstrap bootstrap = new Bootstrap();

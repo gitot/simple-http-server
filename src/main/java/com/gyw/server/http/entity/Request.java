@@ -1,13 +1,22 @@
 package com.gyw.server.http.entity;
 
 
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.http.HttpMessage;
+import io.netty.handler.codec.http.HttpRequest;
+import io.netty.handler.codec.http.QueryStringDecoder;
+
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.List;
+import java.util.Map;
 
 public class Request {
     private String method;
     private String url;
 
+    private ChannelHandlerContext ctx;
+    private HttpRequest req;
 
     public Request(InputStream in) {
         String content = "";
@@ -29,11 +38,31 @@ public class Request {
 
     }
 
+    public Request(ChannelHandlerContext ctx, HttpRequest req) {
+        this.ctx = ctx;
+        this.req = req;
+    }
+
     public String getMethod() {
-        return method;
+        return req.method().name();
     }
 
     public String getUrl() {
-        return url;
+        return req.getUri();
+    }
+
+    public Map<String, List<String>> getParameters() {
+        QueryStringDecoder decoder = new QueryStringDecoder(req.getUri());
+        return decoder.parameters();
+    }
+
+    public String getParameter(String name) {
+        Map<String, List<String>> parameters = getParameters();
+        List<String> params = parameters.get(name);
+        if (null == params) {
+            return null;
+        } else {
+            return params.get(0);
+        }
     }
 }
